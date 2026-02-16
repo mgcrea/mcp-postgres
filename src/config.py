@@ -1,0 +1,30 @@
+"""Configuration management from environment variables."""
+
+import os
+from dataclasses import dataclass
+
+
+@dataclass
+class PostgresConfig:
+    """Postgres connection configuration."""
+
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+
+    @property
+    def connection_string(self) -> str:
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+
+
+def get_postgres_config() -> PostgresConfig:
+    """Load Postgres configuration from environment variables."""
+    return PostgresConfig(
+        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        user=os.environ.get("POSTGRES_USER", "postgres"),
+        password=os.environ.get("POSTGRES_PASSWORD", ""),
+        database=os.environ.get("POSTGRES_DB", "postgres"),
+    )
