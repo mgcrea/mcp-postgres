@@ -22,7 +22,7 @@ structlog.configure(
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 
-from tools.postgres import register_postgres_tools  # noqa: E402
+from .tools.postgres import register_postgres_tools  # noqa: E402
 
 logger = structlog.get_logger()
 

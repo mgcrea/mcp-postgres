@@ -5,9 +5,9 @@ import asyncio
 import psycopg
 from mcp.server.fastmcp import FastMCP
 
-from audit import audit_log
-from config import get_postgres_config
-from sql_validation import ReadOnlyViolationError, validate_readonly_query
+from ..audit import audit_log
+from ..config import get_postgres_config
+from ..sql_validation import ReadOnlyViolationError, validate_readonly_query
 
 # Timeout configuration (seconds)
 CONNECT_TIMEOUT = 10
