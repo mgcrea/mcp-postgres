@@ -13,6 +13,7 @@ class PostgresConfig:
     user: str
     password: str
     database: str
+    readonly: bool
 
     @property
     def connection_string(self) -> str:
@@ -27,4 +28,5 @@ def get_postgres_config() -> PostgresConfig:
         user=os.environ.get("POSTGRES_USER", "postgres"),
         password=os.environ.get("POSTGRES_PASSWORD", ""),
         database=os.environ.get("POSTGRES_DB", "postgres"),
+        readonly=os.environ.get("POSTGRES_READONLY", "true").lower() in ("true", "1", "yes"),
     )
