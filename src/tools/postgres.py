@@ -7,6 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 from audit import audit_log
 from config import get_postgres_config
+from sql_validation import ReadOnlyViolationError, validate_readonly_query
 
 # Timeout configuration (seconds)
 CONNECT_TIMEOUT = 10
@@ -18,14 +19,19 @@ def register_postgres_tools(mcp: FastMCP) -> None:
     def _get_connection():
         """Create Postgres connection with timeout settings."""
         config = get_postgres_config()
-        return psycopg.connect(config.connection_string, connect_timeout=CONNECT_TIMEOUT)
+        connect_kwargs = {"connect_timeout": CONNECT_TIMEOUT}
+        if config.readonly:
+            connect_kwargs["options"] = "-c default_transaction_read_only=on"
+        return psycopg.connect(config.connection_string, **connect_kwargs)
 
     def _sync_postgres_query(query: str) -> str:
         """Synchronous Postgres query execution."""
-        # Validate read-only query
-        query_upper = query.strip().upper()
-        if not query_upper.startswith("SELECT"):
-            return "Error: Only SELECT queries are allowed. This is a read-only connection."
+        config = get_postgres_config()
+        if config.readonly:
+            try:
+                validate_readonly_query(query)
+            except ReadOnlyViolationError as e:
+                return f"Error: {e}"
 
         with audit_log("postgres_query", {"query": query}):
             with _get_connection() as conn:
