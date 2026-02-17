@@ -23,6 +23,13 @@ pipelines:
               - uv run ruff format --check src/
             caches:
               - uv
+        - step:
+            name: Run Tests
+            script:
+              - *uv-install
+              - uv run pytest -v
+            caches:
+              - uv
     - step:
         name: Release
         script:
