@@ -54,21 +54,3 @@ pipelines:
             fi
         services:
           - docker
-    - step:
-        name: Deploy to Staging
-        image: ghcr.io/helmfile/helmfile:v1.2.3
-        deployment: staging
-        trigger: manual
-        script:
-          # Variables
-          - IMAGE_TAG="${BITBUCKET_BRANCH}-${BITBUCKET_COMMIT:0:8}"
-          - SERVICE_NAME="${BITBUCKET_REPO_SLUG}"
-          # Authentication
-          - echo "$KUBECONFIG_BASE64" | base64 -d > /tmp/kubeconfig
-          - export KUBECONFIG=/tmp/kubeconfig
-          # Script
-          - >-
-            kubectl patch ksvc ${SERVICE_NAME}
-            -n knative-services
-            --type json
-            -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"'${HARBOR_REGISTRY}'/'${HARBOR_PROJECT}'/'${SERVICE_NAME}':'${IMAGE_TAG}'"}]'
