@@ -20,7 +20,7 @@ class PostgresConfig:
         return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
 
 
-def get_postgres_config() -> PostgresConfig:
+def get_config() -> PostgresConfig:
     """Load Postgres configuration from environment variables."""
     return PostgresConfig(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
