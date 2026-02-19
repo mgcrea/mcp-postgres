@@ -1,6 +1,7 @@
 """MCP Postgres Tool Server — read-only PostgreSQL access for AI agents."""
 
 import contextlib
+import json
 import os
 
 import structlog
@@ -36,6 +37,40 @@ mcp = FastMCP(name=NAME, transport_security=security_settings, streamable_http_p
 
 register_postgres_tools(mcp)
 logger.info("registered_postgres_tools")
+
+
+def register_platform_resources(mcp: FastMCP) -> int:
+    """Register resources injected by the platform via MCP_RESOURCES env var.
+
+    The platform serializes assigned resources as a JSON object:
+    {"slug": {"name": "...", "description": "...", "text": "..."}, ...}
+    """
+    raw = os.environ.get("MCP_RESOURCES")
+    if not raw:
+        return 0
+
+    resources = json.loads(raw)
+    for slug, meta in resources.items():
+        text = meta["text"]
+
+        def _make_reader(s: str, m: dict, content: str):
+            @mcp.resource(
+                f"resource://{s}",
+                name=m.get("name", s),
+                description=m.get("description", ""),
+                mime_type="text/plain",
+            )
+            def _read() -> str:
+                return content
+
+        _make_reader(slug, meta, text)
+
+    return len(resources)
+
+
+resource_count = register_platform_resources(mcp)
+if resource_count:
+    logger.info("registered_platform_resources", count=resource_count)
 
 
 def main():
