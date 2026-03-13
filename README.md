@@ -21,14 +21,15 @@ make server
 
 ## Environment Variables
 
-| Variable            | Default     | Description       |
-| ------------------- | ----------- | ----------------- |
-| `POSTGRES_HOST`     | `localhost` | PostgreSQL host   |
-| `POSTGRES_PORT`     | `5432`      | PostgreSQL port   |
-| `POSTGRES_USER`     | `postgres`  | Database user     |
-| `POSTGRES_PASSWORD` |             | Database password |
-| `POSTGRES_DB`       | `postgres`  | Database name     |
-| `MCP_PORT`          | `8080`      | Server port       |
+| Variable            | Default     | Description               |
+| ------------------- | ----------- | ------------------------- |
+| `POSTGRES_HOST`     | `localhost` | PostgreSQL host           |
+| `POSTGRES_PORT`     | `5432`      | PostgreSQL port           |
+| `POSTGRES_USER`     | `postgres`  | Database user             |
+| `POSTGRES_PASSWORD` |             | Database password         |
+| `POSTGRES_DB`       | `postgres`  | Database name             |
+| `POSTGRES_READONLY` | `true`      | Enforce read-only queries |
+| `MCP_PORT`          | `8080`      | Server port               |
 
 ## Endpoints
 
@@ -38,6 +39,32 @@ make server
 | `/`        | GET    | Server info (name, version, transports) |
 | `/mcp`     | POST   | MCP Streamable-HTTP transport           |
 | `/sse`     | GET    | MCP SSE transport (legacy)              |
+
+## Usage with `.mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "postgres": {
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-p", "8080:8080",
+        "-e", "POSTGRES_HOST=host.docker.internal",
+        "-e", "POSTGRES_PORT=5432",
+        "-e", "POSTGRES_USER=postgres",
+        "-e", "POSTGRES_PASSWORD=secret",
+        "-e", "POSTGRES_DB=mydb",
+        "ghcr.io/mgcrea/mcp-postgres"
+      ]
+    }
+  }
+}
+```
+
+> Use `host.docker.internal` to connect to a PostgreSQL instance running on the host machine.
 
 ## Docker
 
