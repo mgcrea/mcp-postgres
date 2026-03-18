@@ -1,4 +1,4 @@
-.PHONY: help install server format lint spec docker-build docker-run
+.PHONY: help install server stdio format lint spec docker-build docker-run
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -11,6 +11,9 @@ install: ## Install dependencies with uv
 
 server: ## Run the MCP server locally
 	uv run mcp-postgres
+
+stdio: ## Run the MCP server in stdio mode
+	MCP_TRANSPORT=stdio uv run mcp-postgres
 
 format: ## Format code
 	uv run ruff check --fix; uv run ruff format
