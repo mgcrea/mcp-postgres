@@ -21,15 +21,16 @@ make server
 
 ## Environment Variables
 
-| Variable            | Default     | Description               |
-| ------------------- | ----------- | ------------------------- |
-| `POSTGRES_HOST`     | `localhost` | PostgreSQL host           |
-| `POSTGRES_PORT`     | `5432`      | PostgreSQL port           |
-| `POSTGRES_USER`     | `postgres`  | Database user             |
-| `POSTGRES_PASSWORD` |             | Database password         |
-| `POSTGRES_DB`       | `postgres`  | Database name             |
-| `POSTGRES_READONLY` | `true`      | Enforce read-only queries |
-| `MCP_PORT`          | `8080`      | Server port               |
+| Variable            | Default     | Description                |
+| ------------------- | ----------- | -------------------------- |
+| `POSTGRES_HOST`     | `localhost` | PostgreSQL host            |
+| `POSTGRES_PORT`     | `5432`      | PostgreSQL port            |
+| `POSTGRES_USER`     | `postgres`  | Database user              |
+| `POSTGRES_PASSWORD` |             | Database password          |
+| `POSTGRES_DB`       | `postgres`  | Database name              |
+| `POSTGRES_READONLY` | `true`      | Enforce read-only queries  |
+| `MCP_TRANSPORT`     | `http`      | Transport: `http`, `stdio` |
+| `MCP_PORT`          | `8080`      | Server port (http only)    |
 
 ## Endpoints
 
@@ -46,12 +47,11 @@ make server
 {
   "mcpServers": {
     "postgres": {
-      "type": "streamable-http",
-      "url": "http://localhost:8080/mcp",
+      "type": "stdio",
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-p", "8080:8080",
+        "-e", "MCP_TRANSPORT=stdio",
         "-e", "POSTGRES_HOST=host.docker.internal",
         "-e", "POSTGRES_PORT=5432",
         "-e", "POSTGRES_USER=postgres",

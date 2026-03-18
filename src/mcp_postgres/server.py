@@ -75,6 +75,13 @@ if resource_count:
 
 def main():
     """Entry point for the MCP Postgres server."""
+    transport = os.environ.get("MCP_TRANSPORT", "http").lower()
+
+    if transport == "stdio":
+        logger.info("starting_server", transport="stdio")
+        mcp.run(transport="stdio")
+        return
+
     import uvicorn
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
