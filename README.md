@@ -6,7 +6,7 @@ MCP tool server providing PostgreSQL database access for AI agents.
 
 | Tool                      | Description                                       |
 | ------------------------- | ------------------------------------------------- |
-| `postgres_query`          | Execute read-only SQL SELECT queries              |
+| `postgres_query`          | Execute SQL queries (read-only by default)        |
 | `postgres_list_tables`    | List all tables in a schema                       |
 | `postgres_describe_table` | Get table structure (columns, types, constraints) |
 
@@ -29,6 +29,8 @@ make server
 | `POSTGRES_PASSWORD` |             | Database password          |
 | `POSTGRES_DB`       | `postgres`  | Database name              |
 | `POSTGRES_READONLY` | `true`      | Enforce read-only queries  |
+
+> Set `POSTGRES_READONLY=false` to enable read/write mode (INSERT, UPDATE, DELETE, etc.).
 | `MCP_TRANSPORT`     | `http`      | Transport: `http`, `stdio` |
 | `MCP_PORT`          | `8080`      | Server port (http only)    |
 
