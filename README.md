@@ -29,10 +29,10 @@ make server
 | `POSTGRES_PASSWORD` |             | Database password          |
 | `POSTGRES_DB`       | `postgres`  | Database name              |
 | `POSTGRES_READONLY` | `true`      | Enforce read-only queries  |
-
-> Set `POSTGRES_READONLY=false` to enable read/write mode (INSERT, UPDATE, DELETE, etc.).
 | `MCP_TRANSPORT`     | `http`      | Transport: `http`, `stdio` |
 | `MCP_PORT`          | `8080`      | Server port (http only)    |
+
+> Set `POSTGRES_READONLY=false` to enable read/write mode (INSERT, UPDATE, DELETE, etc.).
 
 ## Endpoints
 
@@ -45,6 +45,7 @@ make server
 
 ## Usage with `.mcp.json`
 
+<!-- prettier-ignore -->
 ```json
 {
   "mcpServers": {
@@ -52,21 +53,13 @@ make server
       "type": "stdio",
       "command": "docker",
       "args": [
-        "run",
-        "--rm",
-        "-i",
-        "-e",
-        "MCP_TRANSPORT=stdio",
-        "-e",
-        "POSTGRES_HOST=host.docker.internal",
-        "-e",
-        "POSTGRES_PORT=5432",
-        "-e",
-        "POSTGRES_USER=postgres",
-        "-e",
-        "POSTGRES_PASSWORD=secret",
-        "-e",
-        "POSTGRES_DB=mydb",
+        "run", "--rm", "-i",
+        "-e", "MCP_TRANSPORT=stdio",
+        "-e", "POSTGRES_HOST=host.docker.internal",
+        "-e", "POSTGRES_PORT=5432",
+        "-e", "POSTGRES_USER=postgres",
+        "-e", "POSTGRES_PASSWORD=secret",
+        "-e", "POSTGRES_DB=mydb",
         "ghcr.io/mgcrea/mcp-postgres"
       ]
     }
