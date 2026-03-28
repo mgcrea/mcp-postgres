@@ -1,6 +1,6 @@
 # mcp-postgres
 
-MCP tool server providing read-only PostgreSQL database access for AI agents.
+MCP tool server providing PostgreSQL database access for AI agents.
 
 ## Tools
 
@@ -50,13 +50,21 @@ make server
       "type": "stdio",
       "command": "docker",
       "args": [
-        "run", "--rm", "-i",
-        "-e", "MCP_TRANSPORT=stdio",
-        "-e", "POSTGRES_HOST=host.docker.internal",
-        "-e", "POSTGRES_PORT=5432",
-        "-e", "POSTGRES_USER=postgres",
-        "-e", "POSTGRES_PASSWORD=secret",
-        "-e", "POSTGRES_DB=mydb",
+        "run",
+        "--rm",
+        "-i",
+        "-e",
+        "MCP_TRANSPORT=stdio",
+        "-e",
+        "POSTGRES_HOST=host.docker.internal",
+        "-e",
+        "POSTGRES_PORT=5432",
+        "-e",
+        "POSTGRES_USER=postgres",
+        "-e",
+        "POSTGRES_PASSWORD=secret",
+        "-e",
+        "POSTGRES_DB=mydb",
         "ghcr.io/mgcrea/mcp-postgres"
       ]
     }
