@@ -9,10 +9,10 @@
     <img src="https://img.shields.io/badge/ghcr.io-mgcrea%2Fmcp--postgres-blue?style=for-the-badge" alt="docker image" />
   </a>
   <a href="https://github.com/mgcrea/mcp-postgres">
-    <img src="https://img.shields.io/github/license/mgcrea/mcp-postgres?style=for-the-badge" alt="license" />
+    <img src="https://img.shields.io/badge/python-3.12+-blue?style=for-the-badge" alt="python version" />
   </a>
   <a href="https://github.com/mgcrea/mcp-postgres">
-    <img src="https://img.shields.io/badge/python-3.12+-blue?style=for-the-badge" alt="python version" />
+    <img src="https://img.shields.io/github/license/mgcrea/mcp-postgres?style=for-the-badge" alt="license" />
   </a>
 </p>
 <!-- markdownlint-enable MD033 -->
