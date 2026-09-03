@@ -4,11 +4,22 @@ version = "0.1.0"
 description = "MCP tool server — read-only PostgreSQL access for AI agents"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.0.0",
-    "uvicorn>=0.32.0",
-    "starlette>=0.41.0",
-    "psycopg[binary]>=3.2.0",
-    "structlog>=24.0.0",
+    "mcp>=2.1.1",
+    "uvicorn>=0.52.4",
+    "starlette>=1.6.0",
+    "psycopg[binary]>=3.3.5",
+    "structlog>=26.1.0",
+    # Per-caller authentication and authorization. Resolved from PyPI, deliberately: a
+    # `[tool.uv.sources]` path to a sibling checkout works locally but not in the Docker
+    # build, whose context is this directory alone.
+    #
+    # >=0.6.1 is a floor, not a preference. It is the first release that sends
+    # `User-Agent: mcp-policy-guard/<version>` to the PDP, and the platform reads that header
+    # to stamp `Tool.policyGuardVersion` — which is what moves this tool's row on the
+    # Enforcement Coverage panel off "Never checked in". A guard reporting no version is also
+    # treated as too old to be handed a row predicate, so resources a predicate would have
+    # narrowed are denied outright instead of served.
+    "mcp-policy-guard>=0.6.1",
 ]
 
 [project.scripts]
@@ -16,9 +27,9 @@ mcp-postgres = "mcp_postgres.server:main"
 
 [dependency-groups]
 dev = [
-    "ruff>=0.9.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
+    "ruff>=0.16.5",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [build-system]

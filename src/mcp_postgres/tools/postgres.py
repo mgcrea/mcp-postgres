@@ -3,7 +3,8 @@
 import asyncio
 
 import psycopg
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp_policy_guard import Guard
 
 from ..audit import audit_log
 from ..config import get_config
@@ -12,8 +13,16 @@ from ..sql_validation import ReadOnlyViolationError, validate_readonly_query
 # Timeout configuration (seconds)
 CONNECT_TIMEOUT = 10
 
+# Constructed once and shared: `Guard` is thread-safe, holds the httpx client and the
+# per-caller snapshot cache, and `server.py` reads `guard.config` off it to build the routes.
+#
+# Constructing it is inert on its own. With no `MCP_*` variables set — which is every one of
+# the eleven deployments running this image today — `GuardConfig.from_env()` logs
+# `guard_unconfigured` once and every request is served exactly as it was before.
+guard = Guard()
 
-def register_postgres_tools(mcp: FastMCP) -> None:
+
+def register_postgres_tools(mcp: MCPServer) -> None:
     """Register Postgres tools with the MCP server."""
 
     def _get_connection():
