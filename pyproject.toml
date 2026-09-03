@@ -9,6 +9,9 @@ dependencies = [
     "starlette>=1.6.0",
     "psycopg[binary]>=3.3.5",
     "structlog>=26.1.0",
+    # Real PostgreSQL parsing for the table allow-list. A regex cannot do this job — see the
+    # module docstring in src/mcp_postgres/table_extraction.py.
+    "sqlglot>=30.17.0",
     # Per-caller authentication and authorization. Resolved from PyPI, deliberately: a
     # `[tool.uv.sources]` path to a sibling checkout works locally but not in the Docker
     # build, whose context is this directory alone.
