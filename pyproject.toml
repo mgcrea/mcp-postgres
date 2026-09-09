@@ -16,13 +16,26 @@ dependencies = [
     # `[tool.uv.sources]` path to a sibling checkout works locally but not in the Docker
     # build, whose context is this directory alone.
     #
-    # >=0.6.1 is a floor, not a preference. It is the first release that sends
-    # `User-Agent: mcp-policy-guard/<version>` to the PDP, and the platform reads that header
-    # to stamp `Tool.policyGuardVersion` — which is what moves this tool's row on the
-    # Enforcement Coverage panel off "Never checked in". A guard reporting no version is also
-    # treated as too old to be handed a row predicate, so resources a predicate would have
-    # narrowed are denied outright instead of served.
-    "mcp-policy-guard>=0.6.1",
+    # >=0.9.0 is a floor, not a preference, and each step of it is load-bearing here.
+    #
+    # 0.6.1 sends `User-Agent: mcp-policy-guard/<version>` to the PDP, and the platform reads
+    # that header to stamp `Tool.policyGuardVersion` — which is what moves this tool's row on
+    # the Enforcement Coverage panel off "Never checked in". A guard reporting no version is
+    # treated as too old to be handed a row predicate at all.
+    #
+    # 0.8.0 adds `report_not_evaluated`, without which a call that fails *before* policy can
+    # evaluate reaches the platform as nothing at all — no `/evaluate`, no audit row — and a
+    # tool failing that way is indistinguishable from one nobody has called.
+    #
+    # 0.9.0 adds `scope_notice`. Row scoping is otherwise invisible: the predicate is applied
+    # by rewriting the query, so a caller asking about rows they hold no entitlement for gets
+    # a valid query, zero rows and no reason, and the model invents a cause — observed on
+    # 2026-09-08 as an assistant telling a user the database replica was incomplete.
+    #
+    # Raising this floor requires `uv lock --refresh-package mcp-policy-guard`. CI runs
+    # `uv sync --frozen`, which does NOT check the lock against this file, so a raised floor
+    # with a stale lock is a green-looking commit that installs the old version.
+    "mcp-policy-guard>=0.9.0",
 ]
 
 [project.scripts]

@@ -108,6 +108,20 @@ def db(monkeypatch):
 
 
 @pytest.fixture
+def no_column_resources(monkeypatch):
+    """Take the column read set out of a test that is about something else.
+
+    `_column_resources` consults the caller's cached snapshot first and returns nothing when it
+    already denies a table — a real, documented short-circuit, and the cheapest way to hold the
+    column pass still. Without it every enforcing test would also have to stub an
+    `information_schema` read, and would be asserting two read sets while claiming to test one.
+    """
+    snapshot = MagicMock()
+    snapshot.allows.return_value = False
+    monkeypatch.setattr(tools.guard, "snapshot", MagicMock(return_value=snapshot))
+
+
+@pytest.fixture
 def never_connects(monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("opened a database connection on a denied call")
@@ -289,7 +303,7 @@ class TestSearchPathResolution:
     def _enforce(self, monkeypatch):
         monkeypatch.setattr(type(tools.guard.config), "policy_enabled", property(lambda _self: True))
 
-    async def test_the_resolved_schema_qualifies_unqualified_names(self, call, db, monkeypatch):
+    async def test_the_resolved_schema_qualifies_unqualified_names(self, call, db, monkeypatch, no_column_resources):
         """`public` is not assumed: the value comes from the live connection."""
         self._enforce(monkeypatch)
         require = MagicMock(return_value=ALLOWED)
@@ -300,7 +314,7 @@ class TestSearchPathResolution:
         _, resources = require.call_args.args
         assert list(resources) == [Resource("sql_table", "reporting.orders")]
 
-    async def test_an_ambiguous_search_path_is_undetermined(self, call, db, monkeypatch):
+    async def test_an_ambiguous_search_path_is_undetermined(self, call, db, monkeypatch, no_column_resources):
         """With two schemas on the path, PostgreSQL picks whichever *contains* the table.
 
         That is not knowable without a catalogue lookup per name, so the read set is genuinely
@@ -315,7 +329,9 @@ class TestSearchPathResolution:
         _, resources = require.call_args.args
         assert isinstance(resources, _Undetermined)
 
-    async def test_a_qualified_name_is_unaffected_by_an_ambiguous_path(self, call, db, monkeypatch):
+    async def test_a_qualified_name_is_unaffected_by_an_ambiguous_path(
+        self, call, db, monkeypatch, no_column_resources
+    ):
         self._enforce(monkeypatch)
         require = MagicMock(return_value=ALLOWED)
         monkeypatch.setattr(tools.guard, "require", require)

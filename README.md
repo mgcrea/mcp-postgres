@@ -62,17 +62,43 @@ refused. That is correct behaviour and it looks exactly like a regression.
 
 Policy resources submitted per tool:
 
-| Tool                      | Resources                                                         |
-| ------------------------- | ----------------------------------------------------------------- |
-| `postgres_query`          | one `sql_table` per table the query reads, as `schema.table`      |
-| `postgres_list_tables`    | filtered, not refused — a scoped caller sees a smaller database   |
-| `postgres_describe_table` | the named `sql_table`; a denial is indistinguishable from absence |
+| Tool                      | Resources                                                                  |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `postgres_query`          | one `sql_table` per table read, plus one `sql_column` per column read       |
+| `postgres_list_tables`    | filtered, not refused — a scoped caller sees a smaller database             |
+| `postgres_describe_table` | the named `sql_table`; a denial is indistinguishable from absence           |
 
-Tables are parsed out of the SQL with `sqlglot`. When the read set cannot be established — an
-unparseable query, `EXPLAIN`/`SHOW`, a set-returning function, an ambiguous `search_path` — the
-call submits `UNDETERMINED`, which denies where policy is enforcing and is a no-op where it is
-not. See `src/mcp_postgres/table_extraction.py` for the reasoning and the PostgreSQL-specific
-traps.
+Tables and columns are parsed out of the SQL with `sqlglot`. When the read set cannot be
+established — an unparseable query, `EXPLAIN`/`SHOW`, a set-returning function, an ambiguous
+`search_path` — the call submits `UNDETERMINED`, which denies where policy is enforcing and is
+a no-op where it is not. See `src/mcp_postgres/table_extraction.py` for the reasoning and the
+PostgreSQL-specific traps.
+
+`sql_column` resources are submitted **only where a PDP is configured**, and only for a caller
+whose cached snapshot already allows every table involved. They exist for the case a table
+allow-list cannot express: a table that must stay *joinable* while some of its columns stay
+unreachable. See `src/mcp_postgres/column_extraction.py`.
+
+### Row scoping
+
+An allowed table may still be narrowed by row. The decision carries predicates — `district IN
+('D775')`, resolved for this caller by the PDP — and this tool applies them by **rewriting the
+query**, wrapping each governed table in a filtering subquery:
+
+```sql
+FROM sales.perfevents e
+-- becomes
+FROM (SELECT * FROM sales.perfevents WHERE "district" IN ('D775')) AS e
+```
+
+Wrapping the table node rather than appending to the outer `WHERE` is what makes joins, `UNION`
+arms, CTE bodies and correlated subqueries work with no special cases — and what stops an outer
+`OR` widening the scope back out. The model never learns the caller's districts.
+
+**A predicate that cannot be applied exactly refuses the call**, rather than returning extra
+rows. The result also carries a one-line notice saying it was scoped, appended after the rows:
+without it a scoped caller gets a valid query, zero rows and no reason, and the model invents a
+cause. See `src/mcp_postgres/row_filters.py`.
 
 ## Endpoints
 

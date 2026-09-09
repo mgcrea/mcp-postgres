@@ -1,13 +1,18 @@
 """Postgres database tools for MCP."""
 
 import asyncio
+import os
+import time
+from collections.abc import Sequence
 
 import psycopg
 import structlog
 from mcp.server.mcpserver import MCPServer
-from mcp_policy_guard import UNDETERMINED, Guard, PolicyDenied, Resource, audit_call, guarded
+from mcp_policy_guard import UNDETERMINED, Guard, PolicyDenied, Resource, audit_call, guarded, scope_notice
 
+from ..column_extraction import extract_referenced_columns
 from ..config import get_config
+from ..row_filters import RowFilterError, RowPredicate, apply_row_filters
 from ..sql_validation import ReadOnlyViolationError, validate_readonly_query
 from ..table_extraction import (
     TableExtractionError,
@@ -23,6 +28,22 @@ CONNECT_TIMEOUT = 10
 #: Selector kind the platform's policy store uses for SQL tables. One of a fixed vocabulary —
 #: inventing a kind means no rule can ever match it, which on an allow-list denies nothing.
 SQL_TABLE = "sql_table"
+
+#: Selector kind for a single column, as `schema.table.column`.
+#:
+#: Submitted alongside the tables, never instead of them: the two are independent rules, and
+#: `evaluate()` requires *every* resource to be allowed, so a denied column denies the call
+#: while leaving its table joinable. That is the whole point of the kind — the PerfTrack user
+#: table has to stay joinable while date of birth and home address stay unreachable.
+SQL_COLUMN = "sql_column"
+
+#: How long a table's column list is trusted before it is read again.
+#:
+#: Columns change with a schema migration, not with traffic, so this is long. It is bounded at
+#: all because a column *added* to a table must eventually be seen — until it is, a `SELECT *`
+#: expands to a stale list and the new column is authorized against nothing. Ten minutes is
+#: short enough that a migration is picked up within one deploy cycle.
+SCHEMA_CACHE_TTL_SECONDS = int(os.environ.get("POSTGRES_SCHEMA_CACHE_TTL", "600"))
 
 #: The schema label used to qualify unqualified table names when there is no PDP to consult.
 #:
@@ -44,6 +65,29 @@ guard = Guard()
 #: The connection's effective default schema, resolved once per process. See
 #: `_resolve_default_schema`; only ever populated on a deployment that has a PDP configured.
 _default_schema: str | None = None
+
+#: `schema.table` -> (expires_at, column names). Process-local; see `_load_schema_map`.
+_schema_cache: dict[str, tuple[float, frozenset[str]]] = {}
+
+
+def schema_lookup_sql(tables: Sequence[str]) -> tuple[str, list[str]]:
+    """The `information_schema` lookup for a set of `schema.table` names, as (sql, params).
+
+    Module-level, and returning the statement as text, so it can be asserted without a
+    database — every other test in this suite stubs the cursor, so a statement that only ever
+    runs against a real server would ship untested.
+
+    OR'd pairs rather than a row-value constructor, which PostgreSQL supports and **Redshift
+    does not**. Two of the deployments running this image are Redshift, and this lookup runs
+    for every governed query that names a table: getting it wrong breaks every real query while
+    `SELECT 1` — which reads no table and skips the lookup — keeps working, an asymmetry that
+    reads as a permissions fault rather than a syntax one. `mcp-mssql` paid for that lesson
+    with the mirror-image bug.
+    """
+    pairs = [table.split(".", 1) for table in tables]
+    predicate = " OR ".join(["(lower(table_schema) = %s AND lower(table_name) = %s)"] * len(pairs))
+    sql = f"SELECT table_schema, table_name, column_name FROM information_schema.columns WHERE {predicate}"
+    return sql, [part for pair in pairs for part in pair]
 
 
 def register_postgres_tools(mcp: MCPServer) -> None:
@@ -104,6 +148,118 @@ def register_postgres_tools(mcp: MCPServer) -> None:
         logger.info("resolved_default_schema", schema=_default_schema)
         return _default_schema
 
+    def _load_schema_map(tables: set[str]) -> dict[str, frozenset[str]]:
+        """The column names of each given table, from `information_schema`.
+
+        Cached per process because this sits on the hot path of every governed query, and a
+        table's column list changes with a migration rather than with traffic.
+
+        Names are kept **as the catalogue spells them**, never folded. That is what lets
+        `column_extraction` and `row_filters` quote a mixed-case column exactly and match
+        PostgreSQL's own resolution; lower-casing here would make `"DateOfBirth"` unreadable
+        through this tool and unfilterable by any rule.
+
+        **This is one of two places a connection may open before the policy decision**, and it
+        is deliberately narrow: it reads the catalogue, never a user row, and only for tables
+        the caller's cached snapshot already says they may read — see `_column_resources`. The
+        property that matters is unchanged: the caller's own query still never executes until
+        `guard.require` has passed.
+        """
+        now = time.monotonic()
+        fresh = {
+            table: entry[1] for table in tables if (entry := _schema_cache.get(table)) is not None and entry[0] > now
+        }
+        stale = sorted(tables - fresh.keys())
+        if not stale:
+            return fresh
+
+        sql, params = schema_lookup_sql(stale)
+        with _get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+
+        loaded: dict[str, set[str]] = {}
+        for schema, table, column in rows:
+            loaded.setdefault(normalize_table_name(schema, table), set()).add(column)
+
+        expires = now + SCHEMA_CACHE_TTL_SECONDS
+        for table in stale:
+            # A table with no rows is cached as empty rather than skipped, so a name that does
+            # not exist does not re-query on every call. `extract_referenced_columns` refuses
+            # an empty entry anyway, because it cannot expand a star against it.
+            columns = frozenset(loaded.get(table, set()))
+            if columns:
+                _schema_cache[table] = (expires, columns)
+            fresh[table] = columns
+        return fresh
+
+    def _column_resources(query: str, tables: frozenset[str]) -> list[Resource]:
+        """The column read set, as policy resources — or nothing when policy cannot use it.
+
+        Skipped entirely when no PDP is configured, so the eleven deployments running this
+        image today behave exactly as they did before columns existed: no catalogue read, and
+        no chance of a column-extraction failure affecting a query nothing was governing.
+
+        Also skipped when the caller's cached snapshot already denies one of the tables. The
+        call is about to be denied on that table regardless, and this is what keeps the
+        catalogue read from happening for a caller who may not read the table it describes.
+        """
+        if not guard.config.policy_enabled:
+            return []
+
+        snapshot = guard.snapshot("postgres_query")
+        if not all(snapshot.allows(SQL_TABLE, table) for table in tables):
+            return []
+
+        read_set = extract_referenced_columns(
+            query,
+            schema_map=_load_schema_map(set(tables)),
+            default_schema=_resolve_default_schema,
+            database=get_config().database,
+        )
+        if read_set.case_merged:
+            # Same merge as the table read set, one level finer. See trap 2 in
+            # table_extraction.py: the platform matches case-insensitively, so no rule could
+            # tell `"District"` from `district` whatever this submitted — logging is what keeps
+            # the merge from being silent.
+            logger.warning("policy_value_case_merged", tool="postgres_query", names=sorted(read_set.case_merged))
+        return [Resource(SQL_COLUMN, column) for column in sorted(read_set.columns)]
+
+    def _apply_policy_filters(query: str, decision, referenced: frozenset[str]) -> str:
+        """Rewrite the query so every row predicate the decision carries holds.
+
+        Only `sql_table` predicates reach here. A column-kind filter would be a predicate on a
+        thing that yields no rows of its own, and silently ignoring one would be the fail-open
+        this module exists to avoid — so it is refused rather than skipped.
+        """
+        predicates = []
+        for row_filter in getattr(decision, "filters", ()):
+            if row_filter.resource.kind != SQL_TABLE:
+                raise RowFilterError(
+                    f"The policy carries a row filter on a {row_filter.resource.kind} resource, "
+                    "which cannot be applied to a SQL query"
+                )
+            predicates.append(
+                RowPredicate(
+                    table=row_filter.resource.value,
+                    column=row_filter.column,
+                    operator=row_filter.operator,
+                    values=tuple(row_filter.values),
+                )
+            )
+
+        if not predicates:
+            return query
+
+        return apply_row_filters(
+            query,
+            predicates,
+            schema_map=_load_schema_map(set(referenced)),
+            default_schema=_resolve_default_schema,
+            database=get_config().database,
+        )
+
     def _query_resources(query: str, record: dict):
         """The policy resources for a query — or `UNDETERMINED` when they cannot be established.
 
@@ -141,6 +297,17 @@ def register_postgres_tools(mcp: MCPServer) -> None:
                 _resolve_default_schema if guard.config.policy_enabled else (lambda: UNGOVERNED_SCHEMA_LABEL)
             )
             read_set = extract_referenced_tables(query, default_schema=default_schema, database=get_config().database)
+            # `ColumnExtractionError` subclasses `TableExtractionError`, so both read sets
+            # degrade through the same handler below.
+            columns = _column_resources(query, read_set.tables)
+        except psycopg.Error:
+            # **Pre-decision infrastructure failure**, and the reason this branch exists rather
+            # than letting the handler below swallow it. Both the `search_path` probe and the
+            # catalogue read open a connection *before* any decision, so a login failure here
+            # is not an undetermined read set: policy never ran. Degrading it to `UNDETERMINED`
+            # would let the PDP record a denial for a call it never saw, and tell the user they
+            # lack access to something. Re-raised for the caller's dedicated handler.
+            raise
         except Exception as exc:  # noqa: BLE001 — see the docstring; degrading beats crashing
             detail = str(exc) if isinstance(exc, TableExtractionError) else f"{type(exc).__name__}: {exc}"
             record["resources"] = ["<undetermined>"]
@@ -158,7 +325,7 @@ def register_postgres_tools(mcp: MCPServer) -> None:
             # silent. See trap 2 in table_extraction.py.
             logger.warning("policy_value_case_merged", tool="postgres_query", names=sorted(read_set.case_merged))
 
-        resources = [Resource(SQL_TABLE, table) for table in sorted(read_set.tables)]
+        resources = [Resource(SQL_TABLE, table) for table in sorted(read_set.tables)] + columns
         record["resources"] = [str(resource) for resource in resources]
         return resources, None
 
@@ -170,15 +337,22 @@ def register_postgres_tools(mcp: MCPServer) -> None:
           1. `validate_readonly_query` — a deny-list over tokens. Runs first because sqlglot
              parses `DELETE` perfectly happily; enumeration is not policy. Skipped entirely
              on a read-write deployment, which is why step 2 re-checks multi-statement.
-          2. `_query_resources` — the allow-list's input, from a real parse. Degrades to
-             `UNDETERMINED` whenever the read set cannot be established.
-          3. `guard.require` — the decision, made against the tables the model actually
-             emitted. Anything an injected instruction persuaded the model to do is already in
-             the query text by this point, which is exactly why the check lives here and not
-             in the prompt.
-          4. Execute.
+          2. `_query_resources` — the allow-list's input, from a real parse: the tables, and
+             (only where a PDP is configured) the columns, so a table can stay joinable while
+             some of its columns stay unreachable. Degrades to `UNDETERMINED` whenever the
+             read set cannot be established.
+          3. `guard.require` — the decision, made against the tables and columns the model
+             actually emitted. Anything an injected instruction persuaded the model to do is
+             already in the query text by this point, which is exactly why the check lives
+             here and not in the prompt.
+          4. `_apply_policy_filters` — rewrite the query so any row predicate the decision
+             carries holds. A predicate that cannot be applied exactly refuses the call.
+          5. Execute.
 
-        **The caller's query never runs until step 3 has passed.**
+        **The caller's query never runs until step 3 has passed.** Step 2 may open a
+        connection before the decision — to resolve `search_path`, or to read
+        `information_schema` — but never a user row, and the catalogue read happens only for
+        tables the caller's cached policy snapshot already permits.
 
         Resources are `sql_table` values, lower-cased `schema.table`. That is the answer to
         "what would a rule about this tool be written about?" — a rule says which tables an
@@ -188,11 +362,11 @@ def register_postgres_tools(mcp: MCPServer) -> None:
         * `[]` — would mean "this call touches nothing in particular" and authorize only at
           the function level. False here, and as a *fallback* on extraction failure it would
           convert the parser's failure into an allow. That is what `UNDETERMINED` is for.
-        * `sql_column` alongside, as `mcp-mssql` submits — genuinely better granularity, and
-          deliberately not done in this change. It needs an `information_schema` cache and
-          star-expansion on the hot path of eight production services in a change whose main
-          risk is already an SDK major-version port. `sql_table` is the useful unit on its
-          own; columns can follow once this has proven itself.
+        * `sql_column` alongside — deferred once, on the grounds that an `information_schema`
+          cache and star-expansion on the hot path of eight production services was too much
+          to carry in a change whose main risk was already an SDK major-version port. It is
+          here now, and gated: `_column_resources` returns `[]` outright when no PDP is
+          configured, so every one of those deployments still pays nothing for it.
         * `sql_schema` instead of per-table — coarser than the rules people actually want to
           write, and derivable from the table value anyway by a rule matching `hr.*`.
         """
@@ -207,7 +381,22 @@ def register_postgres_tools(mcp: MCPServer) -> None:
                     record["reason"] = "read-only violation"
                     return f"Error: {e}"
 
-            resources, undetermined_detail = _query_resources(query, record)
+            try:
+                resources, undetermined_detail = _query_resources(query, record)
+            except psycopg.Error as e:
+                # Pre-decision: policy was never consulted, so this is neither a denial nor an
+                # allow. Until the guard could report it, a call failing here reached the
+                # platform as *nothing at all* — no `/evaluate`, no audit row — and a tool
+                # failing this way looked identical to one nobody had called.
+                reason = f"could not establish the read set: {e}"
+                record["decision"] = "not_evaluated"
+                record["reason"] = reason
+                guard.report_not_evaluated("postgres_query", reason, [])
+                return (
+                    "Error: the database could not be reached to determine what this query "
+                    "reads, so it was not run. This is not an access decision — policy was "
+                    "never consulted. Retry, and report it if it persists."
+                )
 
             try:
                 decision = guard.require("postgres_query", resources)
@@ -225,9 +414,34 @@ def register_postgres_tools(mcp: MCPServer) -> None:
 
             record["decision"] = decision.decision
 
+            # The decision may allow the tables and still narrow which ROWS they yield. The
+            # predicate is applied by rewriting the query, so the model never has to know the
+            # caller's districts — and cannot widen them back out with an OR.
+            try:
+                effective_query = _apply_policy_filters(query, decision, _tables_in(resources))
+            except TableExtractionError as e:
+                # A predicate that could not be applied exactly is not a query that returns
+                # extra rows; it is a query that does not run.
+                record["decision"] = "deny"
+                record["reason"] = f"row filter could not be applied: {e}"
+                return f"Error: {e}"
+            except psycopg.Error as e:
+                # The catalogue read the rewrite needs, failing after `guard.require` already
+                # passed. Reports nothing: the PDP has written its allow row, and a second
+                # report here would file two rows for one call. Same asymmetry the execution
+                # handler below documents.
+                record["reason"] = f"row filter could not be applied: {e}"
+                return (
+                    "Error: the database could not be reached while applying an access policy "
+                    "to this query, so it did not run. Retry, and report it if it persists."
+                )
+
+            if effective_query != query:
+                record["rewritten"] = True
+
             with _get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(query)
+                    cur.execute(effective_query)
                     columns = [desc[0] for desc in cur.description]
                     rows = cur.fetchall()
 
@@ -236,6 +450,17 @@ def register_postgres_tools(mcp: MCPServer) -> None:
                     result_lines.append("-" * len(result_lines[0]))
                     for row in rows:
                         result_lines.append(" | ".join(str(val) for val in row))
+
+                    # Say so when the rewrite narrowed the rows. Without this the scoping is
+                    # invisible: the caller sees a valid query return few rows or none, with
+                    # nothing to distinguish "you may not see these" from "these do not
+                    # exist", and reaches for the second — observed on 2026-09-08 as an
+                    # assistant telling a user the database replica was incomplete. Appended
+                    # **after** the rows because it matters most when there are none, which is
+                    # exactly when there is otherwise no output to hang the explanation on.
+                    notice = scope_notice(getattr(decision, "filters", ()))
+                    if notice:
+                        result_lines.append(f"\n{notice}")
 
                     return "\n".join(result_lines)
 
@@ -249,21 +474,39 @@ def register_postgres_tools(mcp: MCPServer) -> None:
 
         No `search_path` question arises here: `schema` is an explicit parameter, so the
         resource is knowable trivially and exactly.
+
+        The catalogue read is pre-decision by construction, so a database failure is reported
+        as `not_evaluated` rather than left to escape — a refused listing that reaches the
+        platform as nothing at all is indistinguishable from a tool nobody called.
         """
         with audit_call("postgres_list_tables", {"schema": schema}) as record:
-            with _get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT table_name
-                        FROM information_schema.tables
-                        WHERE table_schema = %s
-                        AND table_type = 'BASE TABLE'
-                        ORDER BY table_name
-                        """,
-                        (schema,),
-                    )
-                    tables = [row[0] for row in cur.fetchall()]
+            # Unlike `postgres_query`, this always reads the catalogue before deciding anything
+            # — the listing *is* the input to the decision — so a connection failure here is
+            # unambiguously pre-decision, with no cache-warmth asymmetry to reason about.
+            try:
+                with _get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT table_name
+                            FROM information_schema.tables
+                            WHERE table_schema = %s
+                            AND table_type = 'BASE TABLE'
+                            ORDER BY table_name
+                            """,
+                            (schema,),
+                        )
+                        tables = [row[0] for row in cur.fetchall()]
+            except psycopg.Error as e:
+                reason = f"could not list tables to scope them: {e}"
+                record["decision"] = "not_evaluated"
+                record["reason"] = reason
+                guard.report_not_evaluated("postgres_list_tables", reason, [])
+                return (
+                    "Error: the database could not be reached to list tables, so nothing was "
+                    "listed. This is not an access decision — policy was never consulted. "
+                    "Retry, and report it if it persists."
+                )
 
             try:
                 visible = guard.filter_resources(
@@ -398,6 +641,22 @@ def register_postgres_tools(mcp: MCPServer) -> None:
             Table structure with column names, types, and constraints.
         """
         return await asyncio.to_thread(_sync_postgres_describe_table, table_name, schema)
+
+
+def _tables_in(resources) -> frozenset[str]:
+    """The table half of the resource list, for the rewrite's schema lookup.
+
+    Read back off the resources the decision was made on rather than threaded separately, so
+    the schema map the rewrite uses cannot be taken over a different set of tables than the one
+    that was authorized.
+
+    `resources` may be the `UNDETERMINED` sentinel rather than a list. That yields no tables,
+    which is right: a decision reached on an undetermined read set carries no row filters
+    either, so the rewrite has nothing to do and never asks for a schema.
+    """
+    if not isinstance(resources, (list, tuple)):
+        return frozenset()
+    return frozenset(resource.value for resource in resources if resource.kind == SQL_TABLE)
 
 
 def _denial_message(denied: PolicyDenied) -> str:
